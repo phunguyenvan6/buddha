@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Buddha Gesture</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Hidden video source for MediaPipe -->
+  <video id="video" playsinline autoplay muted></video>
+
+  <!-- Main render surface -->
+  <canvas id="canvas"></canvas>
+
+  <!-- Loading indicator (shown while model warms up) -->
+  <div id="loader">
+    <div class="spinner"></div>
+    <span>Đang tải mô hình…</span>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="instruction">☸&nbsp; Chắp tay như Đức Phật</div>
+    <div id="conf-bar"><div id="conf-fill"></div></div>
+    <div id="mantra">☸&nbsp; Nam Mô A Di Đà Phật &nbsp;☸</div>
+  </div>
+
+  <!-- Intro / permission screen -->
+  <div id="perm-screen">
+    <div class="perm-box">
+      <span class="dharma">☸</span>
+      <h1>Buddha Gesture</h1>
+      <p>
+        Chắp tay trước ngực như Đức Phật —<br />
+        ánh sáng giác ngộ sẽ toả ra từ bạn.
+      </p>
+      <button id="start-btn">Bắt Đầu</button>
+    </div>
+  </div>
+
+  <!-- MediaPipe (loaded before app scripts) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+          crossorigin="anonymous"></script>
+
+  <!-- App -->
+  <script src="js/gesture.js"></script>
+  <script src="js/effects.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>

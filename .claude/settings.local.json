@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m http.server 8765)",
+      "Bash(echo \"PID=$!\")",
+      "Bash(open http://localhost:8765)",
+      "Bash(osascript -e 'tell application \"Google Chrome\" to reload active tab of front window')",
+      "Bash(osascript -e 'tell application \"Safari\" to do JavaScript \"location.reload\\(\\)\" in front document')"
+    ]
+  }
+}
