@@ -1,0 +1,9 @@
+/web/node_modules/
+/web/dist/
+/build
+/web/coverage/
+/web/logs/
+/web/temp/
+/web/cache/
+/web/backup/
+/web/old/

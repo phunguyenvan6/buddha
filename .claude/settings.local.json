@@ -5,7 +5,11 @@
       "Bash(echo \"PID=$!\")",
       "Bash(open http://localhost:8765)",
       "Bash(osascript -e 'tell application \"Google Chrome\" to reload active tab of front window')",
-      "Bash(osascript -e 'tell application \"Safari\" to do JavaScript \"location.reload\\(\\)\" in front document')"
+      "Bash(osascript -e 'tell application \"Safari\" to do JavaScript \"location.reload\\(\\)\" in front document')",
+      "Bash(npm -v)",
+      "Bash(npm init *)",
+      "Bash(npm install *)",
+      "Bash(NODE_TLS_REJECT_UNAUTHORIZED=0 npm install @mediapipe/holistic @mediapipe/camera_utils)"
     ]
   }
 }

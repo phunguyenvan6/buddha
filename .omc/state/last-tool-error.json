@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ls /Users/phu.nguyenvan6/Documents/RnD/buddha-gesture/web/node_modules/@mediapipe/holistic/*.js | head -8 && echo \\\"---\\\" && ls /Users/phu.nguyenvan6/Documents/RnD/buddha-gesture/web/node_...",
+  "error": "Exit code 1\n(eval):1: no matches found: /Users/phu.nguyenvan6/Documents/RnD/buddha-gesture/web/node_modules/@mediapipe/holistic/*.js\n---\nls: /Users/phu.nguyenvan6/Documents/RnD/buddha-gesture/web/node_modules/@mediapipe/camera_utils/: No such file or directory",
+  "timestamp": "2026-05-08T03:09:56.281Z",
+  "retry_count": 1
+}

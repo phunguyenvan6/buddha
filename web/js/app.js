@@ -38,7 +38,7 @@ resize();
 
 // ── MediaPipe Holistic setup ──────────────────────────────────────────────────
 const holistic = new Holistic({
-  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${f}`,
+  locateFile: f => `./node_modules/@mediapipe/holistic/${f}`,
 });
 
 holistic.setOptions({
