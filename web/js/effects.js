@@ -5,6 +5,7 @@
 //    kính rồi tan thành bụi bay đi ("Thanos búng tay"), lộ ra cảnh sáng.
 //  • Viền outline sắc nét ôm cơ thể + các gợn viền toả ra như sóng năng lượng
 //    (dựng từ segmentationMask). Không còn hiệu ứng phát sáng giữa hai bàn tay.
+//  • Vệt sáng comet bám theo tay + bụi phép bắn ra khi tay vẩy nhanh.
 //  • Hệ hạt bụi vàng (motes) bay lên quanh thân khi chắp tay.
 //  • Ánh sáng dùng chế độ hoà trộn cộng ('lighter') → glow rực, mượt, không bệt.
 //  • Vignette ấm ôm quanh khung hình khi đạt trạng thái prayer.
@@ -66,6 +67,13 @@ class EffectsRenderer {
     this._shatterT   = -1;      // -1 = không hoạt động
     this._wasPrayer  = false;
     this.SHATTER_FLY = 1.5;     // giây bay/tan của mỗi mảnh
+
+    // Vệt sáng theo từng đầu ngón + bụi phép khi vẩy nhanh
+    this._trails     = {};      // id đầu ngón → mảng điểm vệt gần đây
+    this._handPrev   = {};      // id đầu ngón → vị trí frame trước
+    this._handSparks = [];
+    this.TRAIL_TTL   = 0.32;    // giây một điểm vệt tồn tại
+    this.MAX_TRAIL   = 24;
 
     this.videoRect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
   }
@@ -139,6 +147,7 @@ class EffectsRenderer {
 
     this._updateRipples(dt, isPrayer);
     this._updateParticles(dt, isPrayer, confidence, torsoPos, handCenter);
+    this._updateHands(dt, gesture.hands || []);
   }
 
   // Định kỳ sinh một gợn viền mới khi đang chắp tay; nuôi lớn & thải gợn hết đời.
@@ -196,6 +205,7 @@ class EffectsRenderer {
     if (confidence > 0.08 && headPos && this.haloOp > 0.01) this._halo(headPos, faceWidth);
 
     this._renderParticles();
+    this._drawHands();
     ctx.restore();
   }
 
@@ -247,6 +257,121 @@ class EffectsRenderer {
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
       g.addColorStop(0,   `rgba(255,244,190,${alpha.toFixed(3)})`);
       g.addColorStop(0.4, `rgba(255,210,90,${(alpha * 0.6).toFixed(3)})`);
+      g.addColorStop(1,   'rgba(255,180,30,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ── Vệt sáng theo tay + bụi phép ──────────────────────────────────────────
+
+  _updateHands(dt, tips) {
+    const seen = {};
+    for (const h of tips) {
+      seen[h.id] = true;
+      if (!this._trails[h.id]) this._trails[h.id] = [];
+      const trail = this._trails[h.id];
+      const last  = trail[trail.length - 1];
+      // Chỉ thêm điểm khi đầu ngón dịch đủ xa → vệt gọn, đứng yên không nhiễu.
+      if (!last || Math.hypot(h.x - last.x, h.y - last.y) > 1.5) {
+        trail.push({ x: h.x, y: h.y, life: 0 });
+        if (trail.length > this.MAX_TRAIL) trail.shift();
+      }
+      // Vận tốc đầu ngón → bắn bụi phép khi vẩy nhanh.
+      const prev = this._handPrev[h.id];
+      if (prev) {
+        const vx = (h.x - prev.x) / Math.max(dt, 1e-3);
+        const vy = (h.y - prev.y) / Math.max(dt, 1e-3);
+        const speed = Math.hypot(vx, vy);
+        if (speed > 350 && this._handSparks.length < 240) {
+          const n = Math.min(3, Math.floor(speed / 400));
+          for (let i = 0; i < n; i++) {
+            this._handSparks.push({
+              x: h.x, y: h.y,
+              vx: vx * 0.15 + (Math.random() - 0.5) * 70,
+              vy: vy * 0.15 + (Math.random() - 0.5) * 70,
+              life: 0, ttl: 0.5 + Math.random() * 0.5,
+              size: 1.0 + Math.random() * 2.0,
+            });
+          }
+        }
+      }
+      this._handPrev[h.id] = { x: h.x, y: h.y };
+    }
+
+    // Già hoá & loại điểm vệt hết đời (mọi đầu ngón, kể cả vừa khuất khỏi khung)
+    for (const id in this._trails) {
+      if (!seen[id]) this._handPrev[id] = null;
+      const trail = this._trails[id];
+      for (let i = trail.length - 1; i >= 0; i--) {
+        trail[i].life += dt;
+        if (trail[i].life > this.TRAIL_TTL) trail.splice(i, 1);
+      }
+    }
+    // Cập nhật bụi phép
+    for (let i = this._handSparks.length - 1; i >= 0; i--) {
+      const p = this._handSparks[i];
+      p.life += dt;
+      if (p.life >= p.ttl) { this._handSparks.splice(i, 1); continue; }
+      p.vy += 120 * dt;              // trọng lực nhẹ
+      p.x  += p.vx * dt;
+      p.y  += p.vy * dt;
+      p.vx *= 1 - 0.8 * dt;
+    }
+  }
+
+  _drawHands() {
+    const ctx = this.ctx;
+
+    // Đốm sáng luôn bám mỗi đầu ngón (hiện cả khi tay đứng yên) → ánh sáng
+    // "theo tay" thấy rõ suốt, kể cả trước khi chắp tay, trên nền sương.
+    const dotR = Math.min(this.canvas.width, this.canvas.height) * 0.02;
+    for (const id in this._handPrev) {
+      const p = this._handPrev[id];
+      if (!p) continue;
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, dotR);
+      g.addColorStop(0,   'rgba(255,250,225,0.55)');
+      g.addColorStop(0.4, 'rgba(255,216,110,0.28)');
+      g.addColorStop(1,   'rgba(255,180,40,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Vệt comet cho từng đầu ngón: lớp glow rộng mờ + lõi sáng, nhạt dần về đuôi.
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const id in this._trails) {
+      const trail = this._trails[id];
+      if (trail.length < 2) continue;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 1; i < trail.length; i++) {
+          const b = trail[i];
+          const k = 1 - b.life / this.TRAIL_TTL;   // 0 (đuôi cũ) → 1 (đầu mới)
+          if (k <= 0) continue;
+          ctx.strokeStyle = pass === 0
+            ? `rgba(255,205,80,${(0.09 * k).toFixed(3)})`
+            : `rgba(255,248,215,${(0.5 * k).toFixed(3)})`;
+          ctx.lineWidth = Math.max(0.5, (pass === 0 ? 11 : 3) * k);
+          ctx.beginPath();
+          ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Bụi phép bắn theo chuyển động
+    for (const p of this._handSparks) {
+      const alpha = (1 - p.life / p.ttl) * 0.9;
+      if (alpha <= 0.01) continue;
+      const r = p.size;
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
+      g.addColorStop(0,   `rgba(255,245,200,${alpha.toFixed(3)})`);
+      g.addColorStop(0.5, `rgba(255,210,90,${(alpha * 0.6).toFixed(3)})`);
       g.addColorStop(1,   'rgba(255,180,30,0)');
       ctx.fillStyle = g;
       ctx.beginPath();

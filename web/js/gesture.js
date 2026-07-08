@@ -119,6 +119,14 @@ class GestureDetector {
     if (!torsoPos && headPos)
       torsoPos = { x: headPos.x, y: headPos.y + faceWidth * 1.8 };
 
+    // Đầu 5 ngón (cái=4, trỏ=8, giữa=12, áp út=16, út=20) của mỗi tay đang thấy
+    // → điểm phát vệt sáng. id = tay + số landmark để renderer nối vệt liên tục
+    // cho đúng từng đầu ngón.
+    const TIPS = [4, 8, 12, 16, 20];
+    const hands = [];
+    if (lh) for (const t of TIPS) hands.push({ id: 'L' + t, ...this._toScreen(lh[t], videoRect) });
+    if (rh) for (const t of TIPS) hands.push({ id: 'R' + t, ...this._toScreen(rh[t], videoRect) });
+
     return {
       confidence: this.smoothedConf,
       isPrayer:   this._isPrayer,
@@ -126,6 +134,7 @@ class GestureDetector {
       headPos,
       torsoPos,
       faceWidth,
+      hands,
     };
   }
 
