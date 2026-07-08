@@ -1,6 +1,8 @@
 // EffectsRenderer — vẽ toàn bộ hiệu ứng "giác ngộ" lên canvas 2D.
 //
 // Nâng cấp so với bản cũ:
+//  • Sương mù động cuộn trôi trước khi chắp tay; khi chắp tay lớp sương vỡ như
+//    kính rồi tan thành bụi bay đi ("Thanos búng tay"), lộ ra cảnh sáng.
 //  • Viền outline sắc nét ôm cơ thể + các gợn viền toả ra như sóng năng lượng
 //    (dựng từ segmentationMask). Không còn hiệu ứng phát sáng giữa hai bàn tay.
 //  • Hệ hạt bụi vàng (motes) bay lên quanh thân khi chắp tay.
@@ -47,6 +49,23 @@ class EffectsRenderer {
     this.RIPPLE_INTERVAL = 0.7;   // giây giữa hai gợn liên tiếp
     this.RIPPLE_TTL      = 1.9;   // giây một gợn sống (toả hết rồi tắt)
     this.RIPPLE_SPREAD   = 0.55;  // scale tối đa cộng thêm khi toả ra
+
+    // Sương mù động: các đám sương cuộn trôi trước khi chắp tay
+    this._fogBlobs = [];
+    for (let i = 0; i < 5; i++) {
+      this._fogBlobs.push({
+        r:     0.35 + Math.random() * 0.30,
+        speed: 0.05 + Math.random() * 0.08,
+        phase: Math.random() * Math.PI * 2,
+        op:    0.10 + Math.random() * 0.10,
+      });
+    }
+
+    // Vỡ kính + phân rã ("Thanos búng tay") khi vừa chắp tay
+    this._shards     = [];
+    this._shatterT   = -1;      // -1 = không hoạt động
+    this._wasPrayer  = false;
+    this.SHATTER_FLY = 1.5;     // giây bay/tan của mỗi mảnh
 
     this.videoRect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
   }
@@ -112,6 +131,12 @@ class EffectsRenderer {
 
     this.rayAngle += dt * 0.35;
 
+    // Vỡ kính + phân rã khi vừa chắp tay; hoàn nguyên khi buông tay.
+    if (isPrayer && !this._wasPrayer) this._startShatter(handCenter);
+    if (!isPrayer && this._wasPrayer) { this._shards = []; this._shatterT = -1; }
+    this._wasPrayer = isPrayer;
+    if (this._shatterT >= 0) this._updateShards(dt);
+
     this._updateRipples(dt, isPrayer);
     this._updateParticles(dt, isPrayer, confidence, torsoPos, handCenter);
   }
@@ -147,10 +172,11 @@ class EffectsRenderer {
     ctx.drawImage(video, vr.x, vr.y, vr.w, vr.h);
     ctx.restore();
 
-    // ── 2. Lớp phủ tối ────────────────────────────────────────────────────────
-    if (this.fogAlpha > 0.005) {
-      ctx.fillStyle = `rgba(8,4,18,${this.fogAlpha.toFixed(3)})`;
-      ctx.fillRect(0, 0, cw, ch);
+    // ── 2. Sương mù động, hoặc lớp sương đang vỡ tan ─────────────────────────
+    if (this._shatterT >= 0) {
+      this._drawShards(ctx);
+    } else if (this.fogAlpha > 0.005) {
+      this._drawFog(ctx, cw, ch, this.fogAlpha);
     }
 
     // ── 3. Vignette ấm khi đã "giác ngộ" ─────────────────────────────────────
@@ -240,6 +266,171 @@ class EffectsRenderer {
     g.addColorStop(1, `rgba(120,70,0,${(k * 0.35).toFixed(3)})`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, cw, ch);
+  }
+
+  // Sương mù: nền tối + các đám sương xám cuộn trôi (trước khi chắp tay).
+  _drawFog(ctx, cw, ch, alpha) {
+    ctx.fillStyle = `rgba(8,4,18,${alpha.toFixed(3)})`;
+    ctx.fillRect(0, 0, cw, ch);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const b of this._fogBlobs) {
+      const t = this.time * b.speed + b.phase;
+      const x = cw * (0.5 + 0.42 * Math.sin(t));
+      const y = ch * (0.5 + 0.30 * Math.cos(t * 0.8 + b.phase));
+      const r = Math.min(cw, ch) * b.r;
+      const a = alpha * b.op;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `rgba(120,130,158,${a.toFixed(3)})`);
+      g.addColorStop(1, 'rgba(90,100,130,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, cw, ch);
+    }
+    ctx.restore();
+  }
+
+  // Bắt đầu vỡ: tạo mảnh kính KHÔNG ĐỀU theo kiểu nứt do va đập điểm — các nan
+  // toả ra từ tâm (chỗ hai tay) + các vòng đồng tâm, đều bị jitter ngẫu nhiên.
+  // Giao của chúng cho các mảnh nhỏ ở tâm, lớn dần ra rìa; sau đó mỗi mảnh bay
+  // ra, xoay, co nhỏ và tan thành bụi ("Thanos búng tay").
+  _startShatter(center) {
+    const cw = this.canvas.width, ch = this.canvas.height;
+    const cx = center ? center.x : cw * 0.5;
+    const cy = center ? center.y : ch * 0.5;
+
+    // Bán kính đủ phủ tới góc màn xa nhất
+    let maxR = 0;
+    for (const [gx, gy] of [[0, 0], [cw, 0], [0, ch], [cw, ch]])
+      maxR = Math.max(maxR, Math.hypot(gx - cx, gy - cy));
+    maxR *= 1.08;
+
+    // Góc các nan: đều + jitter → khoảng cách không đều
+    const nSpokes = 18;
+    const step = (Math.PI * 2) / nSpokes;
+    const angles = [];
+    for (let i = 0; i < nSpokes; i++)
+      angles.push(i * step + (Math.random() - 0.5) * step * 0.7);
+    angles.push(angles[0] + Math.PI * 2);   // khép vòng
+
+    // Bán kính các vòng theo phân bố luỹ thừa (dồn dày ở tâm) + jitter → mảnh
+    // nhỏ gần tay, to dần ra rìa màn hình. Chuẩn hoá để vòng ngoài phủ hết maxR.
+    const nRings = 9;
+    const radii = [0];
+    for (let j = 1; j <= nRings; j++) {
+      const frac   = j / nRings;
+      const base   = Math.pow(frac, 1.9);              // dồn vòng về gần tâm
+      const jitter = (Math.random() - 0.5) * (0.6 / nRings);
+      radii.push(Math.max(radii[j - 1] + 0.01, base + jitter));
+    }
+    const norm = maxR / radii[radii.length - 1];
+    for (let j = 1; j < radii.length; j++) radii[j] *= norm;
+
+    // Dựng lưới node (giao nan × vòng) rồi NHIỄU từng node → cạnh mảnh gãy khúc
+    // bất quy tắc, không còn các "đường chéo" thẳng toả đều ra tâm. Các mảnh liền
+    // kề dùng chung node nên vẫn phủ kín, không kẽ hở.
+    const nodes = [];
+    for (let i = 0; i <= nSpokes; i++) {
+      const a = angles[i];
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const col = [];
+      for (let j = 0; j <= nRings; j++) {
+        if (j === 0)       { col.push([cx, cy]); continue; }       // tâm cố định
+        if (i === nSpokes) { col.push(nodes[0][j]); continue; }    // khép vòng
+        const r = radii[j];
+        const ringGap = r - radii[j - 1];
+        const jt = (Math.random() - 0.5) * (r * step) * 0.6;       // lệch tiếp tuyến
+        const jr = (Math.random() - 0.5) * ringGap * 0.6;          // lệch xuyên tâm
+        col.push([
+          cx + ca * (r + jr) - sa * jt,
+          cy + sa * (r + jr) + ca * jt,
+        ]);
+      }
+      nodes.push(col);
+    }
+
+    this._shards = [];
+    for (let i = 0; i < nSpokes; i++) {
+      for (let j = 0; j < nRings; j++) {
+        const verts = [
+          nodes[i][j], nodes[i + 1][j], nodes[i + 1][j + 1], nodes[i][j + 1],
+        ];
+        let mx = 0, my = 0;                    // trọng tâm mảnh
+        for (const v of verts) { mx += v[0]; my += v[1]; }
+        mx /= 4; my /= 4;
+        const dx = mx - cx, dy = my - cy;
+        const dist = Math.hypot(dx, dy) || 1;
+        this._shards.push({
+          cx: mx, cy: my,
+          pts: verts.map(v => [v[0] - mx, v[1] - my]),   // đỉnh tương đối trọng tâm
+          ux: dx / dist, uy: dy / dist,
+          delay: (dist / maxR) * 0.5,          // sóng vỡ lan dần từ tâm
+          speed: 220 + Math.random() * 260,
+          rot: 0, vrot: (Math.random() - 0.5) * 6,
+          bright: 0.85 + Math.random() * 0.5,
+        });
+      }
+    }
+    this._shatterT = 0;
+  }
+
+  _updateShards(dt) {
+    this._shatterT += dt;
+    const t = this._shatterT;
+    for (const s of this._shards) {
+      const t2 = t - s.delay;
+      if (t2 < 0 || t2 >= this.SHATTER_FLY) continue;   // chưa vỡ hoặc đã tan
+      s.cx  += (s.ux * s.speed * 0.6 + 45) * dt;         // toả ra + gió sang phải
+      s.cy  += (s.uy * s.speed * 0.6 - 95) * dt;         // + bốc lên
+      s.rot += s.vrot * dt;
+    }
+    if (t > 0.5 + this.SHATTER_FLY + 0.05) { this._shatterT = -1; this._shards = []; }
+  }
+
+  // Vẽ mảnh kính: đứng yên (còn phủ kín) → bay, xoay, co nhỏ, mờ dần thành bụi.
+  _drawShards(ctx) {
+    const t = this._shatterT;
+    for (const s of this._shards) {
+      const t2 = t - s.delay;
+      let scale = 1, alpha = 1, flying = false;
+      if (t2 >= 0) {
+        const k = t2 / this.SHATTER_FLY;
+        if (k >= 1) continue;
+        scale  = 1 - 0.65 * k;
+        alpha  = 1 - k * k;
+        flying = true;
+      }
+      const cb = s.bright;
+      const fill = `rgb(${(10 * cb) | 0},${(7 * cb) | 0},${(24 * cb) | 0})`;
+
+      ctx.save();
+      ctx.translate(s.cx, s.cy);
+      if (flying) { ctx.rotate(s.rot); ctx.scale(scale, scale); }
+
+      ctx.beginPath();
+      ctx.moveTo(s.pts[0][0], s.pts[0][1]);
+      for (let p = 1; p < s.pts.length; p++) ctx.lineTo(s.pts[p][0], s.pts[p][1]);
+      ctx.closePath();
+
+      ctx.globalAlpha = alpha * 0.62;
+      ctx.fillStyle = fill;
+      ctx.fill();
+
+      if (flying) {
+        // Mép kính sáng khi đã bung ra
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.strokeStyle = 'rgba(175,205,255,1)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else {
+        // Bịt kẽ hở giữa các mảnh khi còn đứng yên
+        ctx.globalAlpha = alpha * 0.62;
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   // Hiệu ứng thân: glow nền rất dịu + viền outline sắc nét ôm sát cơ thể,
