@@ -17,9 +17,11 @@ let latestGesture = {
   confidence: 0, isPrayer: false,
   handCenter: null, headPos: null, torsoPos: null, faceWidth: 0,
 };
-let started  = false;
-let lastTime = 0;
-let bell     = null;   // BellSound, tạo sau khi người dùng bấm Bắt Đầu
+let started     = false;
+let lastTime    = 0;
+let bell        = null;   // BellSound, tạo sau khi người dùng bấm Bắt Đầu
+let firstResult = false;  // đã nhận kết quả đầu tiên từ model chưa
+let modelTimer  = null;   // timeout phát hiện model không tải được
 
 // ── Canh kích thước canvas / vùng video ─────────────────────────────────────
 let videoRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -52,8 +54,10 @@ window.addEventListener('resize', resize);
 resize();
 
 // ── MediaPipe Holistic ───────────────────────────────────────────────────────
+// Tải asset (wasm/tflite/data/binarypb) từ CDN jsdelivr, khớp phiên bản đã pin.
+const HOLISTIC_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629';
 const holistic = new Holistic({
-  locateFile: f => `./node_modules/@mediapipe/holistic/${f}`,
+  locateFile: f => `${HOLISTIC_CDN}/${f}`,
 });
 
 holistic.setOptions({
@@ -67,7 +71,11 @@ holistic.setOptions({
 
 // Chỉ tính toán gesture + cập nhật silhouette ở đây — KHÔNG vẽ. Việc vẽ do renderLoop lo.
 holistic.onResults(results => {
-  if (loaderEl.style.display !== 'none') loaderEl.style.display = 'none';
+  if (!firstResult) {
+    firstResult = true;
+    loaderEl.style.display = 'none';
+    if (modelTimer) { clearTimeout(modelTimer); modelTimer = null; }
+  }
   latestGesture = detector.detect(results, videoRect);
   // Dựng silhouette ngay trong callback (mask chỉ hợp lệ tại đây), tần suất thấp
   // hơn render loop nên rẻ. renderLoop chỉ việc blur + vẽ lại.
@@ -134,6 +142,9 @@ startBtn.addEventListener('click', async () => {
     });
     cam.start();
 
+    // Nếu sau 30s vẫn chưa có kết quả đầu tiên → coi như lỗi tải mô hình.
+    modelTimer = setTimeout(() => { if (!firstResult) showModelError(); }, 30000);
+
     started = true;
     requestAnimationFrame(renderLoop);
 
@@ -143,6 +154,16 @@ startBtn.addEventListener('click', async () => {
     startBtn.textContent = 'Bắt Đầu';
   }
 });
+
+// Model không tải xong sau timeout: đổi loader thành thông báo lỗi (bỏ spinner).
+function showModelError() {
+  const spinner = loaderEl.querySelector('.spinner');
+  if (spinner) spinner.style.display = 'none';
+  const txt = loaderEl.querySelector('span');
+  if (txt) txt.innerHTML =
+    'Không tải được mô hình.<br>Kiểm tra kết nối mạng rồi tải lại trang.';
+  loaderEl.style.display = 'flex';
+}
 
 function showError(err) {
   let msg;

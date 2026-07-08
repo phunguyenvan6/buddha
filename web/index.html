@@ -41,9 +41,10 @@
     </div>
   </div>
 
-  <!-- MediaPipe (local — no CDN dependency) -->
-  <script src="./node_modules/@mediapipe/holistic/holistic.js"></script>
-  <script src="./node_modules/@mediapipe/camera_utils/camera_utils.js"></script>
+  <!-- MediaPipe qua CDN jsdelivr (phiên bản pin khớp package.json) —
+       tránh phụ thuộc node_modules/MIME khi deploy static (Render, v.v.) -->
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629/holistic.js"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js"></script>
 
   <!-- App -->
   <script src="js/sound.js"></script>
