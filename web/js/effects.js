@@ -23,6 +23,9 @@ class EffectsRenderer {
     this.MAX_PARTICLES = 90;
     this._spawnAcc     = 0;   // bộ tích luỹ để rải hạt đều theo thời gian
 
+    // Mask đã làm mượt (khử răng cưa/khối vuông của mask thấp phân giải)
+    this._maskSmooth    = document.createElement('canvas');
+    this._maskSmoothCtx = this._maskSmooth.getContext('2d');
     // Silhouette cơ thể dựng từ segmentationMask
     this._sil    = document.createElement('canvas');
     this._silCtx = this._sil.getContext('2d');
@@ -30,6 +33,12 @@ class EffectsRenderer {
     this._outline    = document.createElement('canvas');
     this._outlineCtx = this._outline.getContext('2d');
     this._hasSil = false;
+
+    // Scale ảnh chất lượng cao ở mọi context → không lộ pixel khi phóng to.
+    for (const c of [this.ctx, this._maskSmoothCtx, this._silCtx, this._outlineCtx]) {
+      c.imageSmoothingEnabled = true;
+      c.imageSmoothingQuality = 'high';
+    }
     this.bodyOp  = 0;   // độ hiện của hiệu ứng thân (nội suy theo trạng thái prayer)
 
     // Các "gợn" viền toả ra từ cơ thể như sóng năng lượng
@@ -49,34 +58,43 @@ class EffectsRenderer {
     if (!mask || !mask.width || !mask.height) { this._hasSil = false; return; }
     const w = mask.width, h = mask.height;
 
+    // ── Làm mượt mask một lần: blur nhẹ để khử răng cưa / khối vuông của mask
+    //    thấp phân giải trước khi tô màu và phóng to lên toàn màn hình. ────────
+    const ms = this._maskSmooth, msc = this._maskSmoothCtx;
+    if (ms.width !== w || ms.height !== h) { ms.width = w; ms.height = h; }
+    msc.clearRect(0, 0, w, h);
+    msc.filter = `blur(${Math.max(1, Math.min(w, h) * 0.01).toFixed(2)}px)`;
+    msc.drawImage(mask, 0, 0, w, h);
+    msc.filter = 'none';
+
     // ── Silhouette vàng đặc (nền cho glow dịu) ────────────────────────────────
     const off = this._sil, octx = this._silCtx;
     if (off.width !== w || off.height !== h) { off.width = w; off.height = h; }
     octx.globalCompositeOperation = 'source-over';
     octx.clearRect(0, 0, w, h);
-    octx.drawImage(mask, 0, 0, w, h);        // vùng người = có alpha
+    octx.drawImage(ms, 0, 0, w, h);          // vùng người = có alpha
     octx.globalCompositeOperation = 'source-in';
     octx.fillStyle = 'rgb(255,214,64)';       // tô vàng theo đúng silhouette
     octx.fillRect(0, 0, w, h);
     octx.globalCompositeOperation = 'source-over';
 
     // ── Viền outline sắc nét = (silhouette nở ra) trừ (silhouette gốc) ────────
-    // Nở (dilate) bằng cách vẽ mask lệch theo 16 hướng, rồi khoét lõi để chỉ
-    // còn lại một vòng viền mảnh, đều quanh mép cơ thể.
+    // Nở (dilate) bằng cách vẽ mask mượt lệch theo 24 hướng, rồi khoét lõi để
+    // còn lại một vòng viền mảnh, đều, mượt quanh mép cơ thể.
     const ol = this._outline, olc = this._outlineCtx;
     if (ol.width !== w || ol.height !== h) { ol.width = w; ol.height = h; }
     const R = Math.max(1.5, Math.min(w, h) * 0.012);   // độ dày viền (px không gian mask)
     olc.globalCompositeOperation = 'source-over';
     olc.clearRect(0, 0, w, h);
-    for (let i = 0; i < 16; i++) {
-      const a = (i / 16) * Math.PI * 2;
-      olc.drawImage(mask, Math.cos(a) * R, Math.sin(a) * R, w, h);
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      olc.drawImage(ms, Math.cos(a) * R, Math.sin(a) * R, w, h);
     }
     olc.globalCompositeOperation = 'source-in';
     olc.fillStyle = 'rgb(255,236,140)';        // viền vàng sáng hơn thân
     olc.fillRect(0, 0, w, h);
     olc.globalCompositeOperation = 'destination-out';
-    olc.drawImage(mask, 0, 0, w, h);           // khoét lõi → còn ring viền
+    olc.drawImage(ms, 0, 0, w, h);             // khoét lõi → còn ring viền
     olc.globalCompositeOperation = 'source-over';
 
     this._hasSil = true;
