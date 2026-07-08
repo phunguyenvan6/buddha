@@ -173,3 +173,22 @@ body {
   opacity: 0.65;
   cursor: default;
 }
+
+/* ── Thông báo lỗi camera ────────────────────────────────────────────── */
+#perm-error {
+  color: #ff9a8a;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-top: 18px;
+  min-height: 1.2em;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────────── */
+@media (max-width: 560px) {
+  .dharma       { font-size: 3.6rem; margin-bottom: 16px; }
+  .perm-box h1  { font-size: 1.7rem; }
+  #mantra       { font-size: 1rem; letter-spacing: 0.10em; }
+  #conf-bar     { width: 160px; }
+  #hud          { bottom: 24px; }
+}

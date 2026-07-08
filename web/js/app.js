@@ -6,19 +6,23 @@ const confFill      = document.getElementById('conf-fill');
 const mantraEl      = document.getElementById('mantra');
 const instructionEl = document.getElementById('instruction');
 const loaderEl      = document.getElementById('loader');
+const errorEl       = document.getElementById('perm-error');
 
-const detector  = new GestureDetector();
-let   renderer  = null;
-let   lastTime  = performance.now();
-let   videoRect = { x: 0, y: 0, w: 0, h: 0 };
+const detector = new GestureDetector();
+let   renderer = null;
 
-// ── Canvas / video sizing ─────────────────────────────────────────────────────
-function resize() {
-  canvas.width  = window.innerWidth;
-  canvas.height = window.innerHeight;
-  computeVideoRect();
-  if (renderer) renderer.videoRect = videoRect;
-}
+// Gesture mới nhất do MediaPipe cung cấp (cập nhật ~15–30fps).
+// Render loop chạy riêng bằng requestAnimationFrame để hình luôn mượt ~60fps.
+let latestGesture = {
+  confidence: 0, isPrayer: false,
+  handCenter: null, headPos: null, torsoPos: null, faceWidth: 0,
+};
+let started  = false;
+let lastTime = 0;
+let bell     = null;   // BellSound, tạo sau khi người dùng bấm Bắt Đầu
+
+// ── Canh kích thước canvas / vùng video ─────────────────────────────────────
+let videoRect = { x: 0, y: 0, w: 0, h: 0 };
 
 function computeVideoRect() {
   const vw = video.videoWidth  || 1280;
@@ -31,12 +35,23 @@ function computeVideoRect() {
     w: vw * scale,
     h: vh * scale,
   };
+  if (renderer) renderer.videoRect = videoRect;
+}
+
+// Dùng devicePixelRatio để nét trên màn Retina, nhưng chặn trần ở 2 để nhẹ máy.
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width  = Math.round(window.innerWidth  * dpr);
+  canvas.height = Math.round(window.innerHeight * dpr);
+  canvas.style.width  = window.innerWidth  + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  computeVideoRect();
 }
 
 window.addEventListener('resize', resize);
 resize();
 
-// ── MediaPipe Holistic setup ──────────────────────────────────────────────────
+// ── MediaPipe Holistic ───────────────────────────────────────────────────────
 const holistic = new Holistic({
   locateFile: f => `./node_modules/@mediapipe/holistic/${f}`,
 });
@@ -44,38 +59,54 @@ const holistic = new Holistic({
 holistic.setOptions({
   modelComplexity:        1,
   smoothLandmarks:        true,
+  enableSegmentation:     true,   // bật mặt nạ tách người → làm glow theo cơ thể
+  smoothSegmentation:     true,
   minDetectionConfidence: 0.55,
   minTrackingConfidence:  0.50,
 });
 
-// ── Per-frame processing ──────────────────────────────────────────────────────
-function onFrame(results) {
-  if (!renderer) return;
+// Chỉ tính toán gesture + cập nhật silhouette ở đây — KHÔNG vẽ. Việc vẽ do renderLoop lo.
+holistic.onResults(results => {
+  if (loaderEl.style.display !== 'none') loaderEl.style.display = 'none';
+  latestGesture = detector.detect(results, videoRect);
+  // Dựng silhouette ngay trong callback (mask chỉ hợp lệ tại đây), tần suất thấp
+  // hơn render loop nên rẻ. renderLoop chỉ việc blur + vẽ lại.
+  if (renderer) renderer.setSegmentation(results.segmentationMask || null);
+});
 
-  const now = performance.now();
-  const dt  = Math.min((now - lastTime) / 1000, 0.1);
-  lastTime  = now;
+// ── Vòng lặp render độc lập (mượt, tách khỏi FPS của model) ───────────────────
+function renderLoop(now) {
+  if (!started) return;
+  const dt = lastTime ? Math.min((now - lastTime) / 1000, 0.1) : 0.016;
+  lastTime = now;
 
-  computeVideoRect();
-  renderer.videoRect = videoRect;
+  if (renderer) {
+    renderer.update(latestGesture, dt);
+    renderer.render(latestGesture);
+  }
+  updateHud(latestGesture);
+  requestAnimationFrame(renderLoop);
+}
 
-  const gesture = detector.detect(results, videoRect);
-  renderer.update(gesture, dt);
-  renderer.render(gesture);
-
-  confFill.style.width = `${(gesture.confidence * 100).toFixed(1)}%`;
+function updateHud(gesture) {
   const p = gesture.isPrayer;
+  confFill.style.width = `${(gesture.confidence * 100).toFixed(1)}%`;
   confFill.style.background = p
     ? 'linear-gradient(90deg,#b8860b,#ffd700,#fffacd)'
     : 'linear-gradient(90deg,#3a5fa0,#6ab)';
   mantraEl.style.opacity      = p ? '1' : '0';
   instructionEl.style.opacity = p ? '0' : '1';
+
+  // Rung chuông đúng một lần ở khoảnh khắc bắt đầu chắp tay.
+  if (p && !updateHud._wasPrayer && bell) bell.ring();
+  updateHud._wasPrayer = p;
 }
 
-// ── Start button ──────────────────────────────────────────────────────────────
+// ── Nút Bắt Đầu ───────────────────────────────────────────────────────────────
 startBtn.addEventListener('click', async () => {
   startBtn.disabled    = true;
   startBtn.textContent = 'Đang kết nối…';
+  errorEl.textContent  = '';
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -84,22 +115,18 @@ startBtn.addEventListener('click', async () => {
     video.srcObject = stream;
     await video.play();
 
+    // Chuông chỉ khởi tạo được sau một cú click (chính sách autoplay của trình duyệt).
+    bell = new BellSound();
+
     computeVideoRect();
     renderer = new EffectsRenderer(canvas, video);
     renderer.videoRect = videoRect;
 
-    permScreen.style.opacity     = '0';
+    permScreen.style.opacity       = '0';
     permScreen.style.pointerEvents = 'none';
     setTimeout(() => permScreen.remove(), 600);
 
     loaderEl.style.display = 'flex';
-
-    // First frame: hide loader, then hand off to onFrame for all subsequent frames
-    holistic.onResults(results => {
-      loaderEl.style.display = 'none';
-      holistic.onResults(onFrame);
-      onFrame(results);
-    });
 
     const cam = new Camera(video, {
       onFrame: async () => holistic.send({ image: video }),
@@ -107,9 +134,32 @@ startBtn.addEventListener('click', async () => {
     });
     cam.start();
 
+    started = true;
+    requestAnimationFrame(renderLoop);
+
   } catch (err) {
-    alert('Không thể mở camera: ' + err.message);
+    showError(err);
     startBtn.disabled    = false;
     startBtn.textContent = 'Bắt Đầu';
   }
 });
+
+function showError(err) {
+  let msg;
+  switch (err && err.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      msg = 'Bạn chưa cấp quyền camera. Hãy cho phép truy cập rồi thử lại.';
+      break;
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      msg = 'Không tìm thấy camera nào trên thiết bị.';
+      break;
+    case 'NotReadableError':
+      msg = 'Camera đang được ứng dụng khác sử dụng. Hãy đóng bớt và thử lại.';
+      break;
+    default:
+      msg = 'Không thể mở camera: ' + (err && err.message ? err.message : 'lỗi không rõ');
+  }
+  errorEl.textContent = msg;
+}
