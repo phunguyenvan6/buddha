@@ -8,6 +8,13 @@ const instructionEl = document.getElementById('instruction');
 const loaderEl      = document.getElementById('loader');
 const errorEl       = document.getElementById('perm-error');
 
+// Chế độ nhẹ cho thiết bị cảm ứng/di động (giảm tải MediaPipe + render).
+const IS_MOBILE = matchMedia('(pointer: coarse)').matches ||
+                  /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+const CAM_W     = IS_MOBILE ? 640 : 1280;
+const CAM_H     = IS_MOBILE ? 480 : 720;
+const MIN_FRAME = IS_MOBILE ? 1000 / 40 : 0;   // giới hạn ~40fps render trên mobile
+
 const detector = new GestureDetector();
 let   renderer = null;
 
@@ -42,7 +49,7 @@ function computeVideoRect() {
 
 // Dùng devicePixelRatio để nét trên màn Retina, nhưng chặn trần ở 2 để nhẹ máy.
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, IS_MOBILE ? 1.5 : 2);
   canvas.width  = Math.round(window.innerWidth  * dpr);
   canvas.height = Math.round(window.innerHeight * dpr);
   canvas.style.width  = window.innerWidth  + 'px';
@@ -61,7 +68,7 @@ const holistic = new Holistic({
 });
 
 holistic.setOptions({
-  modelComplexity:        1,
+  modelComplexity:        IS_MOBILE ? 0 : 1,   // 0 nhẹ hơn nhiều cho mobile
   smoothLandmarks:        true,
   enableSegmentation:     true,   // bật mặt nạ tách người → làm glow theo cơ thể
   smoothSegmentation:     true,
@@ -85,6 +92,11 @@ holistic.onResults(results => {
 // ── Vòng lặp render độc lập (mượt, tách khỏi FPS của model) ───────────────────
 function renderLoop(now) {
   if (!started) return;
+  requestAnimationFrame(renderLoop);
+
+  // Giới hạn khung hình trên mobile → nhường CPU cho MediaPipe, đỡ giật.
+  if (MIN_FRAME && lastTime && now - lastTime < MIN_FRAME) return;
+
   const dt = lastTime ? Math.min((now - lastTime) / 1000, 0.1) : 0.016;
   lastTime = now;
 
@@ -93,7 +105,6 @@ function renderLoop(now) {
     renderer.render(latestGesture);
   }
   updateHud(latestGesture);
-  requestAnimationFrame(renderLoop);
 }
 
 function updateHud(gesture) {
@@ -118,7 +129,7 @@ startBtn.addEventListener('click', async () => {
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      video: { width: { ideal: CAM_W }, height: { ideal: CAM_H }, facingMode: 'user' },
     });
     video.srcObject = stream;
     await video.play();
@@ -127,7 +138,7 @@ startBtn.addEventListener('click', async () => {
     bell = new BellSound();
 
     computeVideoRect();
-    renderer = new EffectsRenderer(canvas, video);
+    renderer = new EffectsRenderer(canvas, video, IS_MOBILE);
     renderer.videoRect = videoRect;
 
     permScreen.style.opacity       = '0';
@@ -138,7 +149,7 @@ startBtn.addEventListener('click', async () => {
 
     const cam = new Camera(video, {
       onFrame: async () => holistic.send({ image: video }),
-      width: 1280, height: 720,
+      width: CAM_W, height: CAM_H,
     });
     cam.start();
 

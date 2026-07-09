@@ -11,10 +11,11 @@
 //  • Vignette ấm ôm quanh khung hình khi đạt trạng thái prayer.
 //  • Halo có quầng ngoài, hai vòng và các nan sáng xoay nhẹ.
 class EffectsRenderer {
-  constructor(canvas, video) {
-    this.canvas = canvas;
-    this.ctx    = canvas.getContext('2d');
-    this.video  = video;
+  constructor(canvas, video, lowPerf = false) {
+    this.canvas  = canvas;
+    this.ctx     = canvas.getContext('2d');
+    this.video   = video;
+    this.lowPerf = lowPerf;   // chế độ nhẹ cho mobile
 
     this.fogBlur  = 14;   // px blur lên khung video
     this.fogAlpha = 0.58; // độ mờ lớp phủ tối
@@ -23,7 +24,7 @@ class EffectsRenderer {
     this.time     = 0;     // đồng hồ nội bộ (giây) cho nhịp đập
 
     this.particles     = [];
-    this.MAX_PARTICLES = 90;
+    this.MAX_PARTICLES = lowPerf ? 40 : 90;
     this._spawnAcc     = 0;   // bộ tích luỹ để rải hạt đều theo thời gian
 
     // Mask đã làm mượt (khử răng cưa/khối vuông của mask thấp phân giải)
@@ -37,10 +38,11 @@ class EffectsRenderer {
     this._outlineCtx = this._outline.getContext('2d');
     this._hasSil = false;
 
-    // Scale ảnh chất lượng cao ở mọi context → không lộ pixel khi phóng to.
+    // Scale ảnh mượt ở mọi context. Mobile dùng 'low' (bilinear) cho nhẹ, vẫn
+    // đủ mượt để không lộ pixel; desktop dùng 'high'.
     for (const c of [this.ctx, this._maskSmoothCtx, this._silCtx, this._outlineCtx]) {
       c.imageSmoothingEnabled = true;
-      c.imageSmoothingQuality = 'high';
+      c.imageSmoothingQuality = lowPerf ? 'low' : 'high';
     }
     this.bodyOp  = 0;   // độ hiện của hiệu ứng thân (nội suy theo trạng thái prayer)
 
@@ -53,7 +55,7 @@ class EffectsRenderer {
 
     // Sương mù động: các đám sương cuộn trôi trước khi chắp tay
     this._fogBlobs = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < (lowPerf ? 3 : 5); i++) {
       this._fogBlobs.push({
         r:     0.35 + Math.random() * 0.30,
         speed: 0.05 + Math.random() * 0.08,
@@ -73,7 +75,8 @@ class EffectsRenderer {
     this._handPrev   = {};      // id đầu ngón → vị trí frame trước
     this._handSparks = [];
     this.TRAIL_TTL   = 0.32;    // giây một điểm vệt tồn tại
-    this.MAX_TRAIL   = 24;
+    this.MAX_TRAIL   = lowPerf ? 16 : 24;
+    this._sparkCap   = lowPerf ? 120 : 240;
 
     this.videoRect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
   }
@@ -285,7 +288,7 @@ class EffectsRenderer {
         const vx = (h.x - prev.x) / Math.max(dt, 1e-3);
         const vy = (h.y - prev.y) / Math.max(dt, 1e-3);
         const speed = Math.hypot(vx, vy);
-        if (speed > 350 && this._handSparks.length < 240) {
+        if (speed > 350 && this._handSparks.length < this._sparkCap) {
           const n = Math.min(3, Math.floor(speed / 400));
           for (let i = 0; i < n; i++) {
             this._handSparks.push({
@@ -347,7 +350,7 @@ class EffectsRenderer {
     for (const id in this._trails) {
       const trail = this._trails[id];
       if (trail.length < 2) continue;
-      for (let pass = 0; pass < 2; pass++) {
+      for (let pass = this.lowPerf ? 1 : 0; pass < 2; pass++) {   // mobile: chỉ vẽ lõi
         for (let i = 1; i < trail.length; i++) {
           const b = trail[i];
           const k = 1 - b.life / this.TRAIL_TTL;   // 0 (đuôi cũ) → 1 (đầu mới)
@@ -410,7 +413,7 @@ class EffectsRenderer {
       g.addColorStop(0, `rgba(120,130,158,${a.toFixed(3)})`);
       g.addColorStop(1, 'rgba(90,100,130,0)');
       ctx.fillStyle = g;
-      ctx.fillRect(0, 0, cw, ch);
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);   // chỉ tô quanh đám sương, đỡ overdraw
     }
     ctx.restore();
   }
@@ -431,7 +434,7 @@ class EffectsRenderer {
     maxR *= 1.08;
 
     // Góc các nan: đều + jitter → khoảng cách không đều
-    const nSpokes = 18;
+    const nSpokes = this.lowPerf ? 12 : 18;
     const step = (Math.PI * 2) / nSpokes;
     const angles = [];
     for (let i = 0; i < nSpokes; i++)
@@ -440,7 +443,7 @@ class EffectsRenderer {
 
     // Bán kính các vòng theo phân bố luỹ thừa (dồn dày ở tâm) + jitter → mảnh
     // nhỏ gần tay, to dần ra rìa màn hình. Chuẩn hoá để vòng ngoài phủ hết maxR.
-    const nRings = 9;
+    const nRings = this.lowPerf ? 6 : 9;
     const radii = [0];
     for (let j = 1; j <= nRings; j++) {
       const frac   = j / nRings;
@@ -567,7 +570,7 @@ class EffectsRenderer {
     // 1. Glow nền dịu từ silhouette (blur nhẹ) cho thân có chiều sâu, không bệt.
     ctx.save();
     ctx.globalAlpha = Math.min(1, 0.26 * strength);
-    ctx.filter      = 'blur(14px)';
+    ctx.filter      = `blur(${this.lowPerf ? 9 : 14}px)`;
     ctx.drawImage(this._sil, vr.x, vr.y, vr.w, vr.h);
     ctx.restore();
 
